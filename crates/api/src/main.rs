@@ -14,7 +14,7 @@ mod state;
 
 use std::env;
 
-use axum::http::{Method, header};
+use axum::http::{header, Method};
 use axum::routing::get;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
@@ -104,26 +104,33 @@ async fn main() {
         .route("/health", get(|| async { "ok" }))
         .route(
             "/",
-            get(|| async {
-                axum::response::Html(include_str!("../../../static/index.html"))
-            }),
+            get(|| async { axum::response::Html(include_str!("../../../static/index.html")) }),
         )
         .route(
             "/static/chains/143.svg",
             get(|| async {
-                ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../../../static/chains/143.svg"))
+                (
+                    [(header::CONTENT_TYPE, "image/svg+xml")],
+                    include_str!("../../../static/chains/143.svg"),
+                )
             }),
         )
         .route(
             "/static/chains/1116.svg",
             get(|| async {
-                ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../../../static/chains/1116.svg"))
+                (
+                    [(header::CONTENT_TYPE, "image/svg+xml")],
+                    include_str!("../../../static/chains/1116.svg"),
+                )
             }),
         )
         .route(
             "/static/chains/4200.webp",
             get(|| async {
-                ([(header::CONTENT_TYPE, "image/webp")], include_bytes!("../../../static/chains/4200.webp").as_slice())
+                (
+                    [(header::CONTENT_TYPE, "image/webp")],
+                    include_bytes!("../../../static/chains/4200.webp").as_slice(),
+                )
             }),
         )
         .layer(cors);

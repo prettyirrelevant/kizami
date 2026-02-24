@@ -41,8 +41,6 @@
       --synced-bg: rgba(52,211,153,0.08);
       --syncing: #fbbf24;
       --syncing-bg: rgba(251,191,36,0.08);
-      --waiting: #4e4e56;
-      --waiting-bg: rgba(78,78,86,0.12);
       --track: rgba(255,255,255,0.04);
       --radius: 12px;
       --font-sans: 'Instrument Sans', system-ui, sans-serif;
@@ -308,7 +306,6 @@
 
     .pill.synced { color: var(--synced); background: var(--synced-bg); }
     .pill.syncing { color: var(--syncing); background: var(--syncing-bg); animation: pulse 2.5s ease-in-out infinite; }
-    .pill.waiting { color: var(--waiting); background: var(--waiting-bg); }
 
     /* row 2: progress */
     .card-progress {
@@ -334,7 +331,6 @@
     }
 
     .bar-fill.syncing-bar { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-    .bar-fill.waiting-bar { background: var(--text-muted); }
 
     .pct {
       font-family: var(--font-mono);
@@ -455,7 +451,6 @@
         <button class="on" data-f="all">All</button>
         <button data-f="synced">Synced</button>
         <button data-f="syncing">Syncing</button>
-        <button data-f="waiting">Waiting</button>
       </div>
     </div>
 
@@ -492,9 +487,8 @@
     }
 
     function status(c) {
-      if (c.latestKnownBlock == null) return c.lastIndexedBlock > 0 ? 'syncing' : 'waiting';
-      if (c.latestKnownBlock - c.lastIndexedBlock <= SYNCED_GAP) return 'synced';
-      return c.lastIndexedBlock > 0 ? 'syncing' : 'waiting';
+      if (c.latestKnownBlock != null && c.latestKnownBlock - c.lastIndexedBlock <= SYNCED_GAP) return 'synced';
+      return 'syncing';
     }
 
     function ago(ts) {
@@ -534,7 +528,7 @@
     function card(c, i) {
       const st = status(c);
       const pct = c.progress != null ? c.progress : 0;
-      const barClass = st === 'syncing' ? 'syncing-bar' : (st === 'waiting' ? 'waiting-bar' : '');
+      const barClass = st === 'syncing' ? 'syncing-bar' : '';
 
       let pctText, pctClass;
       if (st === 'synced') {
@@ -549,9 +543,7 @@
       }
 
       let blocksText;
-      if (st === 'waiting') {
-        blocksText = 'waiting to index';
-      } else if (c.latestKnownBlock != null) {
+      if (c.latestKnownBlock != null) {
         blocksText = `<span class="num">${fmt(c.lastIndexedBlock)}</span> of ${fmt(c.latestKnownBlock)}`;
       } else {
         blocksText = `<span class="num">${fmt(c.lastIndexedBlock)}</span> blocks`;
