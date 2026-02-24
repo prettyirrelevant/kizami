@@ -15,6 +15,15 @@ use kizami_shared::models::BlockResponse;
 
 use crate::state::AppState;
 
+/// Valid directions for block lookup.
+#[derive(utoipa::ToSchema)]
+#[schema(rename_all = "lowercase")]
+#[allow(dead_code)]
+enum Direction {
+    Before,
+    After,
+}
+
 #[derive(Deserialize)]
 pub struct BlockPath {
     chain_id: i32,
@@ -41,7 +50,7 @@ pub struct InclusiveQuery {
     description = "Finds the closest block before or after a given Unix timestamp for the specified chain.",
     params(
         ("chain_id" = i32, Path, description = "The chain ID (e.g. 1 for Ethereum, 8453 for Base)"),
-        ("direction" = String, Path, description = "Whether to find the closest block before or after the timestamp"),
+        ("direction" = inline(Direction), Path, description = "Whether to find the closest block before or after the timestamp"),
         ("timestamp" = i64, Path, description = "Unix timestamp in seconds"),
         ("inclusive" = Option<bool>, Query, description = "If true, includes blocks at exactly the given timestamp")
     ),
