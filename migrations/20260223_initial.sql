@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     PRIMARY KEY (chain_id, number)
 );
 
-CREATE INDEX idx_blocks_chain_ts ON blocks (chain_id, timestamp, number);
+CREATE INDEX IF NOT EXISTS idx_blocks_chain_ts ON blocks (chain_id, timestamp, number);
 
 CREATE TABLE IF NOT EXISTS cursors (
     sqd_slug   TEXT PRIMARY KEY,
