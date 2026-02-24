@@ -2,7 +2,7 @@ kizami
 ======
 
 block-by-timestamp lookup API for EVM chains. ingests block headers from SQD Portal
-into Postgres, then serves fast lookups from that index. supports 32 chains.
+into Postgres, then serves fast lookups from that index. supports 30 chains.
 
 stack: rust, axum, postgres, moka (in-memory cache), tokio
 
@@ -12,7 +12,7 @@ data pipeline
 
                          NDJSON               UNNEST
     SQD Portal ---------> Ingestion Loop ---------> Postgres
-    (32 chains)           (50k blocks/batch)         |
+    (30 chains)           (50k blocks/batch)         |
                           (cycles every 60s)         |
                                                      v
                                               +-------------+
@@ -29,7 +29,7 @@ ingestion loop and axum API run as a single binary.
 ingestion cycle
 ---------------
 
-for each of the 32 chains, every 60 seconds:
+for each of the 30 chains, every 60 seconds:
 
     read cursor from Postgres (last ingested block, default 0)
          |

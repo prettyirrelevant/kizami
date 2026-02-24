@@ -1,6 +1,6 @@
 //! Static chain configuration for all supported EVM networks.
 //!
-//! All 32 chains are defined as compile-time constants with zero-allocation lookups
+//! All 30 chains are defined as compile-time constants with zero-allocation lookups
 //! via `LazyLock<HashMap>`. Genesis timestamps are sourced from on-chain RPC
 //! (`eth_getBlockByNumber`); where block 0 has timestamp 0, block 1 is used instead.
 
@@ -155,12 +155,6 @@ pub static CHAINS: &[ChainConfig] = &[
         genesis_timestamp: 1657740761,
     },
     ChainConfig {
-        name: "Hedera",
-        chain_id: 295,
-        sqd_slug: "hedera-mainnet",
-        genesis_timestamp: 1568411631,
-    },
-    ChainConfig {
         name: "Etherlink",
         chain_id: 42793,
         sqd_slug: "etherlink-mainnet",
@@ -177,12 +171,6 @@ pub static CHAINS: &[ChainConfig] = &[
         chain_id: 167000,
         sqd_slug: "taiko-mainnet",
         genesis_timestamp: 1716620627,
-    },
-    ChainConfig {
-        name: "Hemi",
-        chain_id: 43111,
-        sqd_slug: "hemi-mainnet",
-        genesis_timestamp: 1725866711,
     },
     ChainConfig {
         name: "Ink",

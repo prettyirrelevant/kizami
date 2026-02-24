@@ -20,6 +20,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 use utoipa_swagger_ui::SwaggerUi;
 
 use kizami_shared::db;
@@ -32,7 +33,8 @@ use crate::state::AppState;
     info(
         title = "Kizami API",
         description = "Block-by-timestamp lookup API for EVM chains",
-        version = "1.0.0"
+        version = "1.0.0",
+        license(name = "MIT")
     ),
     tags(
         (name = "Chains", description = "Chain information endpoints"),
@@ -87,12 +89,9 @@ async fn main() {
         .allow_origin(Any);
 
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .route("/v1/chains", get(routes::chains::list_chains))
-        .route("/v1/chains/{chain_id}", get(routes::chains::get_chain))
-        .route(
-            "/v1/chains/{chain_id}/block/{direction}/{timestamp}",
-            get(routes::blocks::find_block),
-        )
+        .routes(routes!(routes::chains::list_chains))
+        .routes(routes!(routes::chains::get_chain))
+        .routes(routes!(routes::blocks::find_block))
         .with_state(state)
         .split_for_parts();
 
