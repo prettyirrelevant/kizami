@@ -110,11 +110,10 @@ pub async fn insert_blocks(
 
 /// Returns the last ingested block number for a chain, or 0 if no cursor exists.
 pub async fn get_cursor(pool: &PgPool, sqd_slug: &str) -> Result<i64, sqlx::Error> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT last_block FROM cursors WHERE sqd_slug = $1")
-            .bind(sqd_slug)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT last_block FROM cursors WHERE sqd_slug = $1")
+        .bind(sqd_slug)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|r| r.0).unwrap_or(0))
 }
 
@@ -136,4 +135,190 @@ pub async fn upsert_cursor(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(any(test, feature = "testing"))]
+pub mod tests {
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::{Executor, PgPool};
+    use testcontainers_modules::postgres::Postgres;
+    use testcontainers_modules::testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::testcontainers::ContainerAsync;
+    use tokio::sync::OnceCell;
+
+    use super::*;
+
+    struct TestInfra {
+        _container: ContainerAsync<Postgres>,
+        base_url: String,
+    }
+
+    static INFRA: OnceCell<TestInfra> = OnceCell::const_new();
+
+    async fn init_infra() -> &'static TestInfra {
+        INFRA
+            .get_or_init(|| async {
+                let container = Postgres::default()
+                    .with_db_name("postgres")
+                    .with_user("postgres")
+                    .with_password("postgres")
+                    .start()
+                    .await
+                    .expect("failed to start postgres container");
+
+                let host = container.get_host().await.expect("failed to get host");
+                let port = container
+                    .get_host_port_ipv4(5432)
+                    .await
+                    .expect("failed to get port");
+                let base_url = format!("postgres://postgres:postgres@{host}:{port}");
+
+                let pool = PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(&format!("{base_url}/postgres"))
+                    .await
+                    .expect("failed to connect to postgres");
+
+                pool.execute("DROP DATABASE IF EXISTS template_kizami")
+                    .await
+                    .expect("failed to drop template db");
+                pool.execute("CREATE DATABASE template_kizami")
+                    .await
+                    .expect("failed to create template db");
+
+                let tpl_pool = PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(&format!("{base_url}/template_kizami"))
+                    .await
+                    .expect("failed to connect to template db");
+                run_migrations(&tpl_pool)
+                    .await
+                    .expect("failed to run migrations");
+                tpl_pool.close().await;
+
+                TestInfra {
+                    _container: container,
+                    base_url,
+                }
+            })
+            .await
+    }
+
+    pub async fn test_pool() -> PgPool {
+        let infra = init_infra().await;
+        let db_name = format!("test_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&format!("{}/postgres", infra.base_url))
+            .await
+            .expect("failed to connect for db creation");
+
+        pool.execute(format!("CREATE DATABASE {db_name} TEMPLATE template_kizami").as_str())
+            .await
+            .expect("failed to create test db");
+        pool.close().await;
+
+        PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&format!("{}/{db_name}", infra.base_url))
+            .await
+            .expect("failed to connect to test db")
+    }
+
+    #[tokio::test]
+    async fn insert_and_find_block_before_inclusive() {
+        let pool = test_pool().await;
+        insert_blocks(&pool, 1, &[100, 101, 102], &[1000, 2000, 3000])
+            .await
+            .unwrap();
+
+        let result = find_block(&pool, 1, 2000, "before", true).await.unwrap();
+        assert_eq!(result, Some((101, 2000)));
+    }
+
+    #[tokio::test]
+    async fn insert_and_find_block_before_exclusive() {
+        let pool = test_pool().await;
+        insert_blocks(&pool, 1, &[100, 101, 102], &[1000, 2000, 3000])
+            .await
+            .unwrap();
+
+        let result = find_block(&pool, 1, 2000, "before", false).await.unwrap();
+        assert_eq!(result, Some((100, 1000)));
+    }
+
+    #[tokio::test]
+    async fn insert_and_find_block_after_inclusive() {
+        let pool = test_pool().await;
+        insert_blocks(&pool, 1, &[100, 101, 102], &[1000, 2000, 3000])
+            .await
+            .unwrap();
+
+        let result = find_block(&pool, 1, 2000, "after", true).await.unwrap();
+        assert_eq!(result, Some((101, 2000)));
+    }
+
+    #[tokio::test]
+    async fn insert_and_find_block_after_exclusive() {
+        let pool = test_pool().await;
+        insert_blocks(&pool, 1, &[100, 101, 102], &[1000, 2000, 3000])
+            .await
+            .unwrap();
+
+        let result = find_block(&pool, 1, 2000, "after", false).await.unwrap();
+        assert_eq!(result, Some((102, 3000)));
+    }
+
+    #[tokio::test]
+    async fn find_block_returns_none_when_no_match() {
+        let pool = test_pool().await;
+
+        let result = find_block(&pool, 1, 5000, "before", true).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn insert_blocks_is_idempotent() {
+        let pool = test_pool().await;
+        insert_blocks(&pool, 1, &[100, 101], &[1000, 2000])
+            .await
+            .unwrap();
+        insert_blocks(&pool, 1, &[100, 101], &[1000, 2000])
+            .await
+            .unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blocks WHERE chain_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.0, 2);
+    }
+
+    #[tokio::test]
+    async fn cursor_round_trip() {
+        let pool = test_pool().await;
+        upsert_cursor(&pool, "ethereum-mainnet", 42).await.unwrap();
+
+        let value = get_cursor(&pool, "ethereum-mainnet").await.unwrap();
+        assert_eq!(value, 42);
+    }
+
+    #[tokio::test]
+    async fn cursor_defaults_to_zero() {
+        let pool = test_pool().await;
+
+        let value = get_cursor(&pool, "nonexistent-slug").await.unwrap();
+        assert_eq!(value, 0);
+    }
+
+    #[tokio::test]
+    async fn cursor_upsert_updates_existing() {
+        let pool = test_pool().await;
+        upsert_cursor(&pool, "ethereum-mainnet", 100).await.unwrap();
+        upsert_cursor(&pool, "ethereum-mainnet", 200).await.unwrap();
+
+        let value = get_cursor(&pool, "ethereum-mainnet").await.unwrap();
+        assert_eq!(value, 200);
+    }
 }

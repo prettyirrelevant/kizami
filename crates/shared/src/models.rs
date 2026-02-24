@@ -43,3 +43,34 @@ pub struct ErrorDetail {
     /// Human-readable error description.
     pub message: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_response_serializes_to_camel_case() {
+        let resp = ChainResponse {
+            name: "Ethereum",
+            chain_id: 1,
+            genesis_timestamp: 1438269988,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["chainId"], 1);
+        assert_eq!(json["genesisTimestamp"], 1438269988);
+        assert_eq!(json["name"], "Ethereum");
+    }
+
+    #[test]
+    fn block_response_serializes_to_camel_case() {
+        let resp = BlockResponse {
+            number: 100,
+            timestamp: 1000,
+            indexed_up_to: 200,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["indexedUpTo"], 200);
+        assert_eq!(json["number"], 100);
+        assert_eq!(json["timestamp"], 1000);
+    }
+}

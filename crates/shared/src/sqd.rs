@@ -68,6 +68,12 @@ pub struct SqdClient {
     semaphore: Arc<Semaphore>,
 }
 
+impl Default for SqdClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SqdClient {
     pub fn new() -> Self {
         Self {
@@ -217,5 +223,26 @@ mod tests {
     fn parse_ndjson_empty_input() {
         let blocks = parse_ndjson::<NdjsonBlock>("");
         assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_ndjson_malformed_lines_skipped() {
+        let input = r#"{"header":{"number":1,"timestamp":100}}
+not valid json
+{"header":{"number":2,"timestamp":200}}
+"#;
+        let blocks = parse_ndjson::<NdjsonBlock>(input);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].header.number, 1);
+        assert_eq!(blocks[1].header.number, 2);
+    }
+
+    #[test]
+    fn parse_ndjson_single_line_no_trailing_newline() {
+        let input = r#"{"header":{"number":10,"timestamp":500}}"#;
+        let blocks = parse_ndjson::<NdjsonBlock>(input);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].header.number, 10);
+        assert_eq!(blocks[0].header.timestamp, 500);
     }
 }

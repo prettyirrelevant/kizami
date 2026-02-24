@@ -49,8 +49,7 @@ async fn main() {
         .with_target(false)
         .init();
 
-    let database_url =
-        env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
 
     let pool = db::create_pool(&database_url)

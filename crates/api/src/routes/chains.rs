@@ -3,8 +3,8 @@
 //! These handlers serve static chain configuration data. No database access is needed
 //! since all chain info is compiled into the binary.
 
-use axum::Json;
 use axum::extract::Path;
+use axum::Json;
 
 use kizami_shared::chains::{self, CHAINS};
 use kizami_shared::error::AppError;
@@ -55,4 +55,30 @@ pub async fn get_chain(Path(chain_id): Path<i32>) -> Result<Json<ChainResponse>,
         chain_id: chain.chain_id,
         genesis_timestamp: chain.genesis_timestamp,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn list_chains_returns_all_chains() {
+        let Json(chains) = list_chains().await;
+        assert_eq!(chains.len(), CHAINS.len());
+    }
+
+    #[tokio::test]
+    async fn get_chain_returns_ethereum() {
+        let result = get_chain(Path(1)).await;
+        let Json(chain) = result.unwrap();
+        assert_eq!(chain.name, "Ethereum");
+        assert_eq!(chain.chain_id, 1);
+    }
+
+    #[tokio::test]
+    async fn get_chain_unknown_returns_not_found() {
+        let result = get_chain(Path(999999)).await;
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "CHAIN_NOT_FOUND");
+    }
 }
