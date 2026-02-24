@@ -14,12 +14,12 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
         .await
 }
 
-/// Runs the initial migration SQL to create tables and indexes.
-pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::raw_sql(include_str!("../../../migrations/20260223_initial.sql"))
-        .execute(pool)
-        .await?;
-    Ok(())
+/// Runs pending migrations from the `migrations/` directory.
+///
+/// Uses sqlx's built-in migration tracking (`_sqlx_migrations` table) so each
+/// migration only runs once.
+pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    sqlx::migrate!("../../migrations").run(pool).await
 }
 
 /// Finds the closest block to a given timestamp in the specified direction.
