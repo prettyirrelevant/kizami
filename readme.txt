@@ -7,14 +7,99 @@ into Postgres, then serves fast lookups from that index. supports 32 chains.
 stack: rust, axum, postgres, moka (in-memory cache), tokio
 
 
-diagrams
---------
+data pipeline
+-------------
 
-architecture overview:
-https://excalidraw.com/#json=X8O5sduqz8SWifNpkSacb,MeFUc3U7lDK38cOQp5JLnA
+                         NDJSON               UNNEST
+    SQD Portal ---------> Ingestion Loop ---------> Postgres
+    (32 chains)           (50k blocks/batch)         |
+                          (cycles every 60s)         |
+                                                     v
+                                              +-------------+
+    Client <--- JSON --- Axum API <---------- | blocks      |
+                          |                   | cursors     |
+                          v                   +-------------+
+                     moka cache
+                     (blocks: 30d TTL)
+                     (cursors: 60s TTL)
 
-block lookup sequence:
-https://excalidraw.com/#json=bZFTZ3CTNslEStyzUAA8_,dIUEToXdSaWjz5Z_LsxSkg
+ingestion loop and axum API run as a single binary.
+
+
+ingestion cycle
+---------------
+
+for each of the 32 chains, every 60 seconds:
+
+    read cursor from Postgres (last ingested block, default 0)
+         |
+         v
+    fetch finalized head from SQD (cached 60s in moka)
+         |
+         v
+    gap = head - cursor
+         |
+         +-- gap <= 0 ---> skip, chain is caught up
+         |
+         +-- gap > 0 ----> compute batch: [cursor+1, min(cursor+50k, head)]
+                                |
+                                v
+                           POST /finalized-stream to SQD
+                           parse NDJSON response (number, timestamp pairs)
+                                |
+                                v
+                           INSERT via UNNEST (ON CONFLICT DO NOTHING)
+                           upsert cursor to new position
+                                |
+                                v
+                           update shared cursor cache (API reads this for indexedUpTo)
+
+backfill happens naturally: new chains start at cursor 0, the loop sees the full
+gap and chews through it in 50k-block batches.
+
+
+block lookup
+------------
+
+    GET /v1/chains/:chainId/block/before/:timestamp
+
+    check moka cache (key: "block:{chainId}:{ts}:{direction}")
+         |
+         +-- hit ----> return cached BlockResponse
+         |
+         +-- miss ---> query Postgres
+                        |
+                        v
+                   SELECT number, timestamp
+                   FROM blocks
+                   WHERE chain_id = $1 AND timestamp < $2
+                   ORDER BY timestamp DESC
+                   LIMIT 1
+                        |
+                        v
+                   fetch indexedUpTo from cursor cache
+                        |
+                        v
+                   cache result (30-day TTL), return BlockResponse
+                   { number, timestamp, indexedUpTo }
+
+
+schema
+------
+
+    blocks
+    +----------+---------+-----------+
+    | chain_id | number  | timestamp |
+    | INTEGER  | BIGINT  | BIGINT    |
+    +----------+---------+-----------+
+    PK: (chain_id, number)
+    covering index: (chain_id, timestamp, number)  -- index-only scans
+
+    cursors
+    +----------+------------+------------+
+    | sqd_slug | last_block | updated_at |
+    | TEXT PK  | BIGINT     | TIMESTAMPTZ|
+    +----------+------------+------------+
 
 
 endpoints
@@ -52,4 +137,3 @@ crates/
   api/          axum server, routes, state
   ingestion/    background ingestion loop
 migrations/     postgres schema
-docs/           architecture doc
