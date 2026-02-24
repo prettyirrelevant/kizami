@@ -108,6 +108,15 @@ pub async fn insert_blocks(
     Ok(result.rows_affected())
 }
 
+/// Returns all cursors with their last block and updated_at timestamp.
+pub async fn get_all_cursors(
+    pool: &PgPool,
+) -> Result<Vec<(String, i64, chrono::DateTime<chrono::Utc>)>, sqlx::Error> {
+    sqlx::query_as("SELECT sqd_slug, last_block, updated_at FROM cursors")
+        .fetch_all(pool)
+        .await
+}
+
 /// Returns the last ingested block number for a chain, or 0 if no cursor exists.
 pub async fn get_cursor(pool: &PgPool, sqd_slug: &str) -> Result<i64, sqlx::Error> {
     let row: Option<(i64,)> = sqlx::query_as("SELECT last_block FROM cursors WHERE sqd_slug = $1")

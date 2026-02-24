@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kizami — block-by-timestamp lookup for EVM chains</title>
+  <meta name="description" content="Look up block numbers by timestamp across 30 EVM chains. kizami indexes block headers and serves fast, cached lookups via a simple REST API.">
+  <meta name="theme-color" content="#0e0e10">
+
+  <!-- open graph -->
+  <meta property="og:title" content="kizami">
+  <meta property="og:description" content="Look up block numbers by timestamp across 30 EVM chains. Fast, cached REST API for resolving Unix timestamps to block numbers.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="kizami">
+  <meta name="author" content="prettyirrelevant">
+
+  <!-- twitter card -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="kizami">
+  <meta name="twitter:description" content="Look up block numbers by timestamp across 30 EVM chains. Fast, cached REST API for resolving Unix timestamps to block numbers.">
+
+  <!-- favicon: two offset blocks connected by a smaller linking square, representing blocks linked through time -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='8' width='40' height='40' rx='8' fill='%2334d399'/><rect x='52' y='52' width='40' height='40' rx='8' fill='%2334d399' opacity='.45'/><rect x='44' y='44' width='12' height='12' rx='3' fill='%2334d399' opacity='.7'/></svg>">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+    :root {
+      --bg: #0c0c0e;
+      --surface: #16161a;
+      --surface-hover: #1c1c21;
+      --border: rgba(255,255,255,0.06);
+      --border-hover: rgba(255,255,255,0.1);
+      --text-primary: #ececef;
+      --text-secondary: #7e7e86;
+      --text-muted: #4e4e56;
+      --synced: #34d399;
+      --synced-bg: rgba(52,211,153,0.08);
+      --syncing: #fbbf24;
+      --syncing-bg: rgba(251,191,36,0.08);
+      --waiting: #4e4e56;
+      --waiting-bg: rgba(78,78,86,0.12);
+      --track: rgba(255,255,255,0.04);
+      --radius: 12px;
+      --font-sans: 'Instrument Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    html { font-size: 16px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text-primary);
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* noise texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      opacity: 0.02;
+      pointer-events: none;
+      z-index: 9999;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 256px 256px;
+    }
+
+    /* ambient glow */
+    body::after {
+      content: '';
+      position: fixed;
+      top: -300px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 900px;
+      height: 600px;
+      background: radial-gradient(ellipse, rgba(52,211,153,0.03) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ---- header ---- */
+    header {
+      padding: 56px 0 0;
+    }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 48px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-led {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--synced);
+      box-shadow: 0 0 6px rgba(52,211,153,0.5);
+      flex-shrink: 0;
+    }
+
+    .status-led.degraded { background: var(--syncing); box-shadow: 0 0 6px rgba(251,191,36,0.5); }
+    .status-led.down { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.5); }
+
+    .brand h1 {
+      font-size: 1.125rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .meta {
+      font-size: 0.6875rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    /* ---- hero stats ---- */
+    .hero {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 48px;
+    }
+
+    .hero-stat {
+      background: var(--surface);
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .hero-num {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hero-num .unit {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-left: 2px;
+    }
+
+    .hero-label {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    /* ---- toolbar ---- */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .section-label {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    /* segmented control */
+    .seg {
+      display: flex;
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 2px;
+    }
+
+    .seg button {
+      font-family: var(--font-sans);
+      font-size: 0.6875rem;
+      font-weight: 500;
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .seg button:hover { color: var(--text-secondary); }
+    .seg button.on { background: var(--surface-hover); color: var(--text-primary); }
+
+    /* ---- grid ---- */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding-bottom: 64px;
+    }
+
+    /* ---- card ---- */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      transition: border-color 0.2s ease, background 0.2s ease;
+      opacity: 0;
+      transform: translateY(6px);
+      animation: fadeUp 0.35s ease forwards;
+    }
+
+    .card:hover {
+      border-color: var(--border-hover);
+      background: var(--surface-hover);
+    }
+
+    /* row 1: identity */
+    .card-identity {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .chain {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .chain-logo {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      object-fit: cover;
+      background: var(--track);
+    }
+
+    .chain-logo-fallback {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      background: var(--track);
+    }
+
+    .chain-name {
+      font-size: 0.875rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pill {
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      font-weight: 500;
+      padding: 3px 7px;
+      border-radius: 4px;
+      line-height: 1;
+      white-space: nowrap;
+      flex-shrink: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+
+    .pill.synced { color: var(--synced); background: var(--synced-bg); }
+    .pill.syncing { color: var(--syncing); background: var(--syncing-bg); animation: pulse 2.5s ease-in-out infinite; }
+    .pill.waiting { color: var(--waiting); background: var(--waiting-bg); }
+
+    /* row 2: progress */
+    .card-progress {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .bar {
+      flex: 1;
+      height: 4px;
+      background: var(--track);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, #2dd4bf, #34d399);
+      width: 0%;
+      transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .bar-fill.syncing-bar { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .bar-fill.waiting-bar { background: var(--text-muted); }
+
+    .pct {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      min-width: 40px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .pct.done { color: var(--synced); }
+
+    /* row 3: block counts */
+    .card-blocks {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      line-height: 1;
+    }
+
+    .card-blocks .num { color: var(--text-secondary); }
+
+    /* ---- empty / loading ---- */
+    .empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 80px 0;
+      color: var(--text-muted);
+      font-size: 0.8125rem;
+    }
+
+    .skel {
+      background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 50%, var(--surface) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s ease-in-out infinite;
+      border-radius: var(--radius);
+      height: 110px;
+      border: 1px solid var(--border);
+    }
+
+    /* ---- footer ---- */
+    footer {
+      padding: 28px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+
+    footer p { font-size: 0.6875rem; color: var(--text-muted); }
+    footer a { color: var(--text-secondary); text-decoration: none; transition: color 0.15s; }
+    footer a:hover { color: var(--text-primary); }
+
+    /* ---- keyframes ---- */
+    @keyframes fadeUp {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.55; }
+    }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ---- responsive ---- */
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+      .hero { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 600px) {
+      header { padding: 36px 0 0; }
+      .header-row { margin-bottom: 32px; }
+      .grid { grid-template-columns: 1fr; gap: 8px; }
+      .hero { grid-template-columns: repeat(2, 1fr); }
+      .hero-num { font-size: 1.375rem; }
+      .hero-stat { padding: 20px 18px; }
+      .toolbar { flex-direction: column; align-items: flex-start; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="header-row">
+        <div class="brand">
+          <div class="status-led" id="led"></div>
+          <h1>kizami</h1>
+        </div>
+        <span class="meta" id="meta">loading...</span>
+      </div>
+      <div class="hero" id="hero">
+        <div class="hero-stat">
+          <div class="hero-num" id="hTotal">--</div>
+          <div class="hero-label">chains</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-num" id="hSynced">--</div>
+          <div class="hero-label">synced</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-num" id="hSyncing">--</div>
+          <div class="hero-label">syncing</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-num" id="hBlocks">--</div>
+          <div class="hero-label">blocks indexed</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <span class="section-label">Networks</span>
+      <div class="seg" id="seg">
+        <button class="on" data-f="all">All</button>
+        <button data-f="synced">Synced</button>
+        <button data-f="syncing">Syncing</button>
+        <button data-f="waiting">Waiting</button>
+      </div>
+    </div>
+
+    <div class="grid" id="grid">
+      <div class="skel"></div><div class="skel"></div><div class="skel"></div>
+      <div class="skel"></div><div class="skel"></div><div class="skel"></div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <p>block-by-timestamp lookup api for evm chains &middot; <a href="/docs">api docs</a> &middot; built by <a href="https://github.com/prettyirrelevant" target="_blank" rel="noopener">prettyirrelevant</a></p>
+    </div>
+  </footer>
+
+  <script>
+    const REFRESH = 60_000;
+    const SYNCED_GAP = 500;
+
+    let lastFetch = null;
+    let filter = 'all';
+    let data = [];
+
+    function fmt(n) {
+      return n == null ? '--' : n.toLocaleString('en-US');
+    }
+
+    function compact(n) {
+      if (n == null) return '--';
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return String(n);
+    }
+
+    function status(c) {
+      if (c.latestKnownBlock == null) return c.lastIndexedBlock > 0 ? 'syncing' : 'waiting';
+      if (c.latestKnownBlock - c.lastIndexedBlock <= SYNCED_GAP) return 'synced';
+      return c.lastIndexedBlock > 0 ? 'syncing' : 'waiting';
+    }
+
+    function ago(ts) {
+      const s = Math.floor((Date.now() - ts) / 1000);
+      if (s < 5) return 'just now';
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      return Math.floor(s / 3600) + 'h ago';
+    }
+
+    // ---- logos ----
+    const A = 'https://cdn.jsdelivr.net/gh/Amichain/chain-icons/svg';
+    const S = 'https://assets.smold.app/api/chain';
+    const LOGOS = {
+      1: `${A}/1.svg`, 10: `${A}/10.svg`, 14: `${S}/14/logo-128.png`,
+      56: `${A}/56.svg`, 100: `${A}/100.svg`, 130: `${S}/130/logo-128.png`,
+      137: `${A}/137.svg`, 143: '/static/chains/143.svg',
+      146: `${A}/146.svg`, 169: `${A}/169.svg`, 204: `${A}/204.svg`,
+      324: `${A}/324.svg`, 1088: `${A}/1088.svg`, 1116: '/static/chains/1116.svg',
+      4200: '/static/chains/4200.webp', 5000: `${A}/5000.svg`,
+      7777777: `${A}/7777777.svg`, 8453: `${A}/8453.svg`,
+      42161: `${A}/42161.svg`, 42220: `${A}/42220.svg`,
+      42793: `${A}/42793.svg`, 43114: `${A}/43114.svg`,
+      57073: `${A}/57073.svg`, 59144: `${S}/59144/logo-128.png`,
+      60808: `${A}/60808.svg`, 80094: `${S}/80094/logo-128.png`,
+      81457: `${A}/81457.svg`, 98866: `${S}/98866/logo-128.png`,
+      167000: `${A}/167000.svg`, 534352: `${A}/534352.svg`,
+    };
+
+    function logoHtml(c) {
+      const src = LOGOS[c.chainId];
+      if (src) return `<img class="chain-logo" src="${src}" alt="">`;
+      return `<div class="chain-logo-fallback">${c.name.charAt(0)}</div>`;
+    }
+
+    // ---- card ----
+    function card(c, i) {
+      const st = status(c);
+      const pct = c.progress != null ? c.progress : 0;
+      const barClass = st === 'syncing' ? 'syncing-bar' : (st === 'waiting' ? 'waiting-bar' : '');
+
+      let pctText, pctClass;
+      if (st === 'synced') {
+        pctText = '100%';
+        pctClass = 'pct done';
+      } else if (c.progress != null) {
+        pctText = pct.toFixed(1) + '%';
+        pctClass = 'pct';
+      } else {
+        pctText = '--';
+        pctClass = 'pct';
+      }
+
+      let blocksText;
+      if (st === 'waiting') {
+        blocksText = 'waiting to index';
+      } else if (c.latestKnownBlock != null) {
+        blocksText = `<span class="num">${fmt(c.lastIndexedBlock)}</span> of ${fmt(c.latestKnownBlock)}`;
+      } else {
+        blocksText = `<span class="num">${fmt(c.lastIndexedBlock)}</span> blocks`;
+      }
+
+      const el = document.createElement('div');
+      el.className = 'card';
+      el.dataset.status = st;
+      el.style.animationDelay = (i * 25) + 'ms';
+      el.innerHTML = `
+        <div class="card-identity">
+          <div class="chain">
+            ${logoHtml(c)}
+            <span class="chain-name">${c.name}</span>
+          </div>
+          <span class="pill ${st}">${st}</span>
+        </div>
+        <div class="card-progress">
+          <div class="bar"><div class="bar-fill ${barClass}" data-w="${Math.min(pct, 100)}"></div></div>
+          <span class="${pctClass}">${pctText}</span>
+        </div>
+        <div class="card-blocks">${blocksText}</div>
+      `;
+      return el;
+    }
+
+    // ---- render ----
+    function render() {
+      const g = document.getElementById('grid');
+      const list = filter === 'all' ? data : data.filter(c => status(c) === filter);
+
+      g.innerHTML = '';
+      if (list.length === 0) {
+        g.innerHTML = '<div class="empty">no chains match this filter</div>';
+        return;
+      }
+
+      list.forEach((c, i) => g.appendChild(card(c, i)));
+
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        g.querySelectorAll('.bar-fill').forEach(b => { b.style.width = b.dataset.w + '%'; });
+      }));
+
+      // hero stats
+      const synced = data.filter(c => status(c) === 'synced').length;
+      const syncing = data.filter(c => status(c) === 'syncing').length;
+      const blocks = data.reduce((s, c) => s + c.lastIndexedBlock, 0);
+
+      document.getElementById('hTotal').textContent = data.length;
+      document.getElementById('hSynced').textContent = synced;
+      document.getElementById('hSyncing').textContent = syncing;
+      document.getElementById('hBlocks').innerHTML = compact(blocks) + '<span class="unit"> blocks</span>';
+
+      const led = document.getElementById('led');
+      led.className = 'status-led';
+      if (synced === data.length) { /* default green */ }
+      else if (syncing > 0 || synced > 0) led.classList.add('degraded');
+      else led.classList.add('down');
+    }
+
+    function tick() {
+      const el = document.getElementById('meta');
+      el.textContent = lastFetch ? 'updated ' + ago(lastFetch) : 'loading...';
+    }
+
+    async function load() {
+      try {
+        const r = await fetch('/v1/indexing-status');
+        if (!r.ok) throw new Error(r.status);
+        data = await r.json();
+        lastFetch = Date.now();
+        render();
+        tick();
+      } catch (e) {
+        console.error('fetch failed:', e);
+        if (!data.length) document.getElementById('grid').innerHTML = '<div class="empty">failed to load data</div>';
+      }
+    }
+
+    // segmented control
+    document.getElementById('seg').addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      document.querySelectorAll('#seg button').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      filter = btn.dataset.f;
+      render();
+    });
+
+    setInterval(tick, 1000);
+    load();
+    setInterval(load, REFRESH);
+  </script>
+</body>
+</html>

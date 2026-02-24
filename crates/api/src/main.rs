@@ -14,7 +14,7 @@ mod state;
 
 use std::env;
 
-use axum::http::Method;
+use axum::http::{Method, header};
 use axum::routing::get;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
@@ -38,7 +38,8 @@ use crate::state::AppState;
     ),
     tags(
         (name = "Chains", description = "Chain information endpoints"),
-        (name = "Blocks", description = "Block lookup endpoints")
+        (name = "Blocks", description = "Block lookup endpoints"),
+        (name = "Status", description = "Indexing status endpoints")
     )
 )]
 struct ApiDoc;
@@ -74,11 +75,13 @@ async fn main() {
     let sqd_client = SqdClient::new();
     let ingestion_pool = pool.clone();
     let ingestion_cursor_cache = state.cursor_cache.clone();
+    let ingestion_head_cache = state.head_cache.clone();
     tokio::spawn(async move {
         kizami_ingestion::run_ingestion_loop(
             ingestion_pool,
             sqd_client,
             ingestion_cursor_cache,
+            ingestion_head_cache,
             shutdown_rx,
         )
         .await;
@@ -92,12 +95,37 @@ async fn main() {
         .routes(routes!(routes::chains::list_chains))
         .routes(routes!(routes::chains::get_chain))
         .routes(routes!(routes::blocks::find_block))
+        .routes(routes!(routes::status::indexing_status))
         .with_state(state)
         .split_for_parts();
 
     let app = router
         .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", api))
         .route("/health", get(|| async { "ok" }))
+        .route(
+            "/",
+            get(|| async {
+                axum::response::Html(include_str!("../../../static/index.html"))
+            }),
+        )
+        .route(
+            "/static/chains/143.svg",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../../../static/chains/143.svg"))
+            }),
+        )
+        .route(
+            "/static/chains/1116.svg",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../../../static/chains/1116.svg"))
+            }),
+        )
+        .route(
+            "/static/chains/4200.webp",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "image/webp")], include_bytes!("../../../static/chains/4200.webp").as_slice())
+            }),
+        )
         .layer(cors);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))

@@ -29,6 +29,25 @@ pub struct BlockResponse {
     pub indexed_up_to: i64,
 }
 
+/// Response for the indexing status endpoint.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexingStatusResponse {
+    /// Human-readable chain name.
+    pub name: &'static str,
+    /// EIP-155 chain ID.
+    pub chain_id: i32,
+    /// Last ingested block number (0 if not started).
+    pub last_indexed_block: i64,
+    /// Latest finalized block from SQD (null if not yet fetched).
+    pub latest_known_block: Option<i64>,
+    /// Indexing progress as a percentage (null if latest_known_block is unavailable).
+    pub progress: Option<f64>,
+    /// When the cursor was last updated (null if never ingested).
+    #[schema(value_type = Option<String>)]
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Top-level error response body.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorBody {

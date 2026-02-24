@@ -42,18 +42,13 @@ pub async fn run_ingestion_loop(
     pool: PgPool,
     sqd_client: SqdClient,
     cursor_cache: Cache<String, i64>,
+    head_cache: Cache<String, i64>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
     let interval_secs: u64 = env::var("INGEST_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(60);
-
-    // finalized head cache: avoids hitting SQD on every chain when heads haven't changed
-    let head_cache: Cache<String, i64> = Cache::builder()
-        .time_to_live(Duration::from_secs(60))
-        .max_capacity(100)
-        .build();
 
     tracing::info!(
         interval_secs = interval_secs,

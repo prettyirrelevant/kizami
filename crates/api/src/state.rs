@@ -21,6 +21,9 @@ pub struct AppState {
     /// Cursor cache for `indexedUpTo` values. Key format: `cursor:{sqdSlug}`.
     /// 60-second TTL, up to 100 entries (one per chain).
     pub cursor_cache: Cache<String, i64>,
+    /// Finalized head cache populated by the ingestion loop. Key: sqd_slug, Value: head block number.
+    /// 60-second TTL, up to 100 entries.
+    pub head_cache: Cache<String, i64>,
 }
 
 impl AppState {
@@ -32,6 +35,10 @@ impl AppState {
                 .max_capacity(100_000)
                 .build(),
             cursor_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(60))
+                .max_capacity(100)
+                .build(),
+            head_cache: Cache::builder()
                 .time_to_live(Duration::from_secs(60))
                 .max_capacity(100)
                 .build(),
