@@ -24,7 +24,7 @@ use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa_scalar::{Scalar, Servable};
 
 use kizami_shared::sqd::SqdClient;
 use kizami_shared::storage::{ChainProgress, Storage};
@@ -107,7 +107,7 @@ async fn main() {
         .split_for_parts();
 
     let app = router
-        .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", api))
+        .merge(Scalar::with_url("/docs", api))
         .route("/health", get(|| async { "ok" }))
         .route(
             "/",
