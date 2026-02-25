@@ -10,7 +10,6 @@ path = "src/main.rs"
 [dependencies]
 kizami-shared = { path = "../shared" }
 kizami-ingestion = { path = "../ingestion" }
-kizami-migrate = { path = "../migrate" }
 axum = "0.8"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

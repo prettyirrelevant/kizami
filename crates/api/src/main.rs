@@ -8,7 +8,6 @@
 //! - `PORT`: HTTP listen port (default: 8080)
 //! - `RUST_LOG`: tracing env filter (default: info)
 //! - `INGEST_INTERVAL_SECS`: seconds between ingestion cycles (default: 60)
-//! - `DATABASE_URL`: if set, runs a one-time Postgres -> fjall migration on startup
 
 mod routes;
 mod state;
@@ -62,11 +61,6 @@ async fn main() {
     let storage = Storage::open(&data_dir).expect("failed to open storage");
 
     tracing::info!(data_dir = %data_dir, "storage opened");
-
-    // one-time postgres migration if DATABASE_URL is set
-    if let Ok(database_url) = env::var("DATABASE_URL") {
-        kizami_migrate::migrate(&database_url, &storage).await;
-    }
 
     // populate progress map from persisted cursors
     let cursors = storage

@@ -40,6 +40,9 @@ const TIMESTAMP_LEN: usize = 8;
 const NUMBER_LEN: usize = 8;
 const BLOCK_KEY_LEN: usize = CHAIN_ID_LEN + TIMESTAMP_LEN + NUMBER_LEN;
 
+/// fjall block cache size. Dominates RSS, tune based on available memory.
+const BLOCK_CACHE_SIZE: u64 = 64 * 1024 * 1024;
+
 fn encode_block_key(chain_id: u32, timestamp: u64, number: u64) -> [u8; BLOCK_KEY_LEN] {
     let mut key = [0u8; BLOCK_KEY_LEN];
     key[..CHAIN_ID_LEN].copy_from_slice(&chain_id.to_be_bytes());
@@ -77,7 +80,7 @@ impl Storage {
     /// Opens (or creates) persistent storage at the given path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, AppError> {
         let db = Database::builder(path)
-            .cache_size(64 * 1024 * 1024)
+            .cache_size(BLOCK_CACHE_SIZE)
             .open()?;
         let blocks = db.keyspace("blocks", KeyspaceCreateOptions::default)?;
         let cursors = db.keyspace("cursors", KeyspaceCreateOptions::default)?;

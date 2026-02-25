@@ -24,6 +24,12 @@ use kizami_shared::storage::{ChainProgress, ProgressMap, Storage};
 /// fjall's capacity for a single batch of inserts.
 const BATCH_SIZE: i64 = 50_000;
 
+/// Fsync fjall's write-ahead journal every N cycles. Data survives process
+/// crashes without this (journal is intact), but an fsync guards against
+/// power loss. 5 cycles ≈ 5 minutes at the default 60s interval, which is
+/// fine since blocks are easily re-fetched from SQD.
+const PERSIST_EVERY_N_CYCLES: u64 = 5;
+
 /// Main ingestion loop. Runs until the shutdown signal is received.
 ///
 /// For each chain sequentially:
@@ -54,7 +60,10 @@ pub async fn run_ingestion_loop(
         "ingestion loop started"
     );
 
+    let mut cycle_count: u64 = 0;
+
     loop {
+        cycle_count += 1;
         let cycle_start = Instant::now();
         let mut chains_checked = 0u32;
         let mut chains_behind = 0u32;
@@ -194,10 +203,17 @@ pub async fn run_ingestion_loop(
             );
         }
 
+        if cycle_count.is_multiple_of(PERSIST_EVERY_N_CYCLES) {
+            if let Err(e) = storage.persist() {
+                tracing::error!(error = %e, "failed to persist storage");
+            }
+        }
+
         tracing::info!(
             job = "schedule",
             chains_checked = chains_checked,
             chains_behind = chains_behind,
+            cycle = cycle_count,
             duration_ms = cycle_start.elapsed().as_millis() as u64,
         );
 

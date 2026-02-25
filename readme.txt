@@ -124,14 +124,6 @@ cargo build --release
 data is stored in ./data by default. override with DATA_DIR.
 
 
-migrating from postgres
------------------------
-
-if upgrading from the postgres-backed version:
-
-DATABASE_URL=postgres://... DATA_DIR=./data cargo run -p kizami-migrate
-
-
 project structure
 -----------------
 
@@ -139,4 +131,3 @@ crates/
   shared/       chain configs, storage layer, SQD client, error types, models
   api/          axum server, routes, state
   ingestion/    background ingestion loop
-  migrate/      one-time postgres -> fjall migration tool
