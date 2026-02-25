@@ -595,7 +595,7 @@
       document.getElementById('hTotal').textContent = data.length;
       document.getElementById('hSynced').textContent = synced;
       document.getElementById('hSyncing').textContent = syncing;
-      document.getElementById('hBlocks').innerHTML = compact(blocks) + '<span class="unit"> blocks</span>';
+      document.getElementById('hBlocks').textContent = compact(blocks);
 
       const led = document.getElementById('led');
       led.className = 'status-led';

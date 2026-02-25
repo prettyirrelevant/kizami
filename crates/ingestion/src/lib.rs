@@ -29,7 +29,7 @@ const BATCH_SIZE: i64 = 50_000;
 ///
 /// For each chain sequentially:
 /// 1. Read cursor from Postgres (last ingested block number, default 0)
-/// 2. Fetch finalized head from SQD (moka cached for 60s to avoid rate limit pressure)
+/// 2. Fetch finalized head from SQD (always refreshed, cached value used as fallback)
 /// 3. If behind, compute batch range `[cursor+1, min(cursor+50k, head)]`
 /// 4. POST to SQD `/finalized-stream`, parse NDJSON, handle partial responses
 /// 5. Bulk-insert via UNNEST with ON CONFLICT DO NOTHING
@@ -80,27 +80,26 @@ pub async fn run_ingestion_loop(
                 }
             };
 
-            let head_number = match head_cache.get(&chain.sqd_slug.to_string()).await {
-                Some(v) => v,
-                None => match sqd_client.fetch_finalized_head(chain.sqd_slug).await {
-                    Ok(head) => {
-                        head_cache
-                            .insert(chain.sqd_slug.to_string(), head.number)
-                            .await;
-                        head.number
+            let cache_key = chain.sqd_slug.to_string();
+            let head_number = match sqd_client.fetch_finalized_head(chain.sqd_slug).await {
+                Ok(head) => {
+                    head_cache.insert(cache_key, head.number).await;
+                    head.number
+                }
+                Err(e) => {
+                    tracing::error!(
+                        job = "ingest",
+                        chain_slug = chain.sqd_slug,
+                        chain_id = chain.chain_id,
+                        outcome = "error",
+                        error = %e,
+                        "failed to fetch finalized head"
+                    );
+                    match head_cache.get(&cache_key).await {
+                        Some(v) => v,
+                        None => continue,
                     }
-                    Err(e) => {
-                        tracing::error!(
-                            job = "ingest",
-                            chain_slug = chain.sqd_slug,
-                            chain_id = chain.chain_id,
-                            outcome = "error",
-                            error = %e,
-                            "failed to fetch finalized head"
-                        );
-                        continue;
-                    }
-                },
+                }
             };
 
             let gap = head_number - cursor_before;
