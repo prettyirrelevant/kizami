@@ -1,21 +1,25 @@
 //! Kizami API server.
 //!
-//! Block-by-timestamp lookup API for EVM chains. Serves cached lookups from Postgres
+//! Block-by-timestamp lookup API for EVM chains. Serves lookups from embedded fjall storage
 //! and runs a background ingestion loop that fetches block headers from SQD Portal.
 //!
 //! Environment variables:
-//! - `DATABASE_URL`: Postgres connection string (required)
+//! - `DATA_DIR`: path to fjall data directory (default: ./data)
 //! - `PORT`: HTTP listen port (default: 8080)
 //! - `RUST_LOG`: tracing env filter (default: info)
 //! - `INGEST_INTERVAL_SECS`: seconds between ingestion cycles (default: 60)
+//! - `DATABASE_URL`: if set, runs a one-time Postgres -> fjall migration on startup
 
 mod routes;
 mod state;
 
+use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 
 use axum::http::{header, Method};
 use axum::routing::get;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
@@ -23,8 +27,8 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use utoipa_swagger_ui::SwaggerUi;
 
-use kizami_shared::db;
 use kizami_shared::sqd::SqdClient;
+use kizami_shared::storage::{ChainProgress, Storage};
 
 use crate::state::AppState;
 
@@ -52,20 +56,39 @@ async fn main() {
         .with_target(false)
         .init();
 
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let data_dir = env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
 
-    let pool = db::create_pool(&database_url)
-        .await
-        .expect("failed to create database pool");
+    let storage = Storage::open(&data_dir).expect("failed to open storage");
 
-    db::run_migrations(&pool)
-        .await
-        .expect("failed to run migrations");
+    tracing::info!(data_dir = %data_dir, "storage opened");
 
-    tracing::info!("database connected and migrations applied");
+    // one-time postgres migration if DATABASE_URL is set
+    if let Ok(database_url) = env::var("DATABASE_URL") {
+        kizami_migrate::migrate(&database_url, &storage).await;
+    }
 
-    let state = AppState::new(pool.clone());
+    // populate progress map from persisted cursors
+    let cursors = storage
+        .get_all_cursors()
+        .expect("failed to read cursors from storage");
+    let mut map = HashMap::new();
+    for (slug, last_block, updated_at) in cursors {
+        map.insert(
+            slug,
+            ChainProgress {
+                cursor: last_block,
+                head: None,
+                updated_at: Some(updated_at),
+            },
+        );
+    }
+    let progress = Arc::new(RwLock::new(map));
+
+    let state = AppState {
+        storage: storage.clone(),
+        progress: progress.clone(),
+    };
 
     // graceful shutdown: ctrl-c signals both the server and ingestion loop
     let shutdown = tokio::signal::ctrl_c();
@@ -73,18 +96,8 @@ async fn main() {
 
     // spawn ingestion as a background task in the same process
     let sqd_client = SqdClient::new();
-    let ingestion_pool = pool.clone();
-    let ingestion_cursor_cache = state.cursor_cache.clone();
-    let ingestion_head_cache = state.head_cache.clone();
     tokio::spawn(async move {
-        kizami_ingestion::run_ingestion_loop(
-            ingestion_pool,
-            sqd_client,
-            ingestion_cursor_cache,
-            ingestion_head_cache,
-            shutdown_rx,
-        )
-        .await;
+        kizami_ingestion::run_ingestion_loop(storage, sqd_client, progress, shutdown_rx).await;
     });
 
     let cors = CorsLayer::new()

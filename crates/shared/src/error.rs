@@ -31,8 +31,8 @@ pub enum AppError {
     #[error("SQD API error: {0}")]
     SqdApi(String),
 
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
+    #[error("storage error: {0}")]
+    Storage(#[from] fjall::Error),
 }
 
 impl AppError {
@@ -44,7 +44,7 @@ impl AppError {
             Self::InvalidTimestamp(_) => "INVALID_TIMESTAMP",
             Self::InvalidDirection(_) => "INVALID_DIRECTION",
             Self::SqdApi(_) => "SQD_API_ERROR",
-            Self::Database(_) => "INTERNAL_ERROR",
+            Self::Storage(_) => "INTERNAL_ERROR",
         }
     }
 
@@ -54,7 +54,7 @@ impl AppError {
             Self::ChainNotFound(_) | Self::BlockNotFound { .. } => StatusCode::NOT_FOUND,
             Self::InvalidTimestamp(_) | Self::InvalidDirection(_) => StatusCode::BAD_REQUEST,
             Self::SqdApi(_) => StatusCode::BAD_GATEWAY,
-            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -103,10 +103,6 @@ mod tests {
             "INVALID_DIRECTION"
         );
         assert_eq!(AppError::SqdApi("err".into()).code(), "SQD_API_ERROR");
-        assert_eq!(
-            AppError::Database(sqlx::Error::RowNotFound).code(),
-            "INTERNAL_ERROR"
-        );
     }
 
     #[test]
@@ -135,10 +131,6 @@ mod tests {
         assert_eq!(
             AppError::SqdApi("err".into()).status(),
             StatusCode::BAD_GATEWAY
-        );
-        assert_eq!(
-            AppError::Database(sqlx::Error::RowNotFound).status(),
-            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 

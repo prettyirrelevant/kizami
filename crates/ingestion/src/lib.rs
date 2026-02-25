@@ -1,11 +1,11 @@
-//! Background ingestion loop that fetches block headers from SQD Portal into Postgres.
+//! Background ingestion loop that fetches block headers from SQD Portal into fjall storage.
 //!
 //! Runs as a tokio task alongside the API server. Each cycle iterates over all chains
 //! sequentially: reads the cursor, checks the finalized head, fetches a batch of blocks
-//! (up to 50k), bulk-inserts via UNNEST, and advances the cursor.
+//! (up to 50k), bulk-inserts into fjall, and advances the cursor.
 //!
 //! Backfill happens naturally: cursors default to 0, so the loop sees the full gap and
-//! works through it in 50k-block batches. Idempotent via ON CONFLICT DO NOTHING.
+//! works through it in 50k-block batches. Idempotent via key-value overwrite.
 //!
 //! Wide event logging: one structured JSON event per chain per cycle, plus one summary
 //! event per cycle with overall stats.
@@ -13,36 +13,34 @@
 use std::env;
 use std::time::{Duration, Instant};
 
-use moka::future::Cache;
-use sqlx::PgPool;
+use chrono::Utc;
 use tokio::sync::oneshot;
 
 use kizami_shared::chains::CHAINS;
-use kizami_shared::db;
 use kizami_shared::sqd::SqdClient;
+use kizami_shared::storage::{ChainProgress, ProgressMap, Storage};
 
-/// Blocks per ingestion batch. At ~30 bytes/row this is ~1.5 MB, well within
-/// Postgres's capacity for a single UNNEST insert.
+/// Blocks per ingestion batch. At ~20 bytes/key this is well within
+/// fjall's capacity for a single batch of inserts.
 const BATCH_SIZE: i64 = 50_000;
 
 /// Main ingestion loop. Runs until the shutdown signal is received.
 ///
 /// For each chain sequentially:
-/// 1. Read cursor from Postgres (last ingested block number, default 0)
+/// 1. Read cursor from progress map (last ingested block number, default 0)
 /// 2. Fetch finalized head from SQD (always refreshed, cached value used as fallback)
 /// 3. If behind, compute batch range `[cursor+1, min(cursor+50k, head)]`
 /// 4. POST to SQD `/finalized-stream`, parse NDJSON, handle partial responses
-/// 5. Bulk-insert via UNNEST with ON CONFLICT DO NOTHING
-/// 6. Upsert cursor in Postgres
-/// 7. Update the shared cursor cache (used by the API for `indexedUpTo`)
+/// 5. Bulk-insert into fjall storage
+/// 6. Upsert cursor in fjall storage
+/// 7. Update the shared progress map (used by the API for `indexedUpTo`)
 ///
 /// On any error, logs and continues to the next chain. Sleeps `INGEST_INTERVAL_SECS`
 /// (default 60) between cycles.
 pub async fn run_ingestion_loop(
-    pool: PgPool,
+    storage: Storage,
     sqd_client: SqdClient,
-    cursor_cache: Cache<String, i64>,
-    head_cache: Cache<String, i64>,
+    progress: ProgressMap,
     mut shutdown: oneshot::Receiver<()>,
 ) {
     let interval_secs: u64 = env::var("INGEST_INTERVAL_SECS")
@@ -65,25 +63,26 @@ pub async fn run_ingestion_loop(
             chains_checked += 1;
             let start = Instant::now();
 
-            let cursor_before = match db::get_cursor(&pool, chain.sqd_slug).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::error!(
-                        job = "ingest",
-                        chain_slug = chain.sqd_slug,
-                        chain_id = chain.chain_id,
-                        outcome = "error",
-                        error = %e,
-                        "failed to read cursor"
-                    );
-                    continue;
-                }
+            let cursor_before = {
+                let map = progress.read().await;
+                map.get(chain.sqd_slug).map(|p| p.cursor).unwrap_or(0)
             };
 
-            let cache_key = chain.sqd_slug.to_string();
             let head_number = match sqd_client.fetch_finalized_head(chain.sqd_slug).await {
                 Ok(head) => {
-                    head_cache.insert(cache_key, head.number).await;
+                    let mut map = progress.write().await;
+                    if let Some(entry) = map.get_mut(chain.sqd_slug) {
+                        entry.head = Some(head.number);
+                    } else {
+                        map.insert(
+                            chain.sqd_slug.to_string(),
+                            ChainProgress {
+                                cursor: cursor_before,
+                                head: Some(head.number),
+                                updated_at: None,
+                            },
+                        );
+                    }
                     head.number
                 }
                 Err(e) => {
@@ -95,7 +94,8 @@ pub async fn run_ingestion_loop(
                         error = %e,
                         "failed to fetch finalized head"
                     );
-                    match head_cache.get(&cache_key).await {
+                    let map = progress.read().await;
+                    match map.get(chain.sqd_slug).and_then(|p| p.head) {
                         Some(v) => v,
                         None => continue,
                     }
@@ -133,10 +133,8 @@ pub async fn run_ingestion_loop(
             };
 
             let blocks_fetched = blocks.len() as i64;
-            let numbers: Vec<i64> = blocks.iter().map(|b| b.number).collect();
-            let timestamps: Vec<i64> = blocks.iter().map(|b| b.timestamp).collect();
 
-            if let Err(e) = db::insert_blocks(&pool, chain.chain_id, &numbers, &timestamps).await {
+            if let Err(e) = storage.insert_block_headers(chain.chain_id, &blocks) {
                 tracing::error!(
                     job = "ingest",
                     chain_slug = chain.sqd_slug,
@@ -150,7 +148,7 @@ pub async fn run_ingestion_loop(
                 continue;
             }
 
-            if let Err(e) = db::upsert_cursor(&pool, chain.sqd_slug, to_block).await {
+            if let Err(e) = storage.upsert_cursor(chain.sqd_slug, to_block) {
                 tracing::error!(
                     job = "ingest",
                     chain_slug = chain.sqd_slug,
@@ -162,10 +160,23 @@ pub async fn run_ingestion_loop(
                 continue;
             }
 
-            // update the shared cursor cache so the API sees the latest indexedUpTo
-            cursor_cache
-                .insert(format!("cursor:{}", chain.sqd_slug), to_block)
-                .await;
+            // update the shared progress map
+            {
+                let mut map = progress.write().await;
+                if let Some(entry) = map.get_mut(chain.sqd_slug) {
+                    entry.cursor = to_block;
+                    entry.updated_at = Some(Utc::now());
+                } else {
+                    map.insert(
+                        chain.sqd_slug.to_string(),
+                        ChainProgress {
+                            cursor: to_block,
+                            head: None,
+                            updated_at: Some(Utc::now()),
+                        },
+                    );
+                }
+            }
 
             let duration_ms = start.elapsed().as_millis();
 
@@ -183,7 +194,6 @@ pub async fn run_ingestion_loop(
             );
         }
 
-        // summary event for the entire cycle
         tracing::info!(
             job = "schedule",
             chains_checked = chains_checked,

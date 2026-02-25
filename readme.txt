@@ -2,26 +2,26 @@ kizami
 ======
 
 block-by-timestamp lookup API for EVM chains. ingests block headers from SQD Portal
-into Postgres, then serves fast lookups from that index. supports 30 chains.
+into an embedded fjall database, then serves fast lookups from that index. supports
+30 chains. single binary, no external dependencies.
 
-stack: rust, axum, postgres, moka (in-memory cache), tokio
+stack: rust, axum, fjall (embedded LSM-tree storage), tokio
 
 
 data pipeline
 -------------
 
-                         NDJSON               UNNEST
-    SQD Portal ---------> Ingestion Loop ---------> Postgres
+                         NDJSON
+    SQD Portal ---------> Ingestion Loop ---------> fjall
     (30 chains)           (50k blocks/batch)         |
                           (cycles every 60s)         |
                                                      v
                                               +-------------+
-    Client <--- JSON --- Axum API <---------- | blocks      |
-                          |                   | cursors     |
+    Client <--- JSON --- Axum API <---------- | blocks KS   |
+                          |                   | cursors KS  |
                           v                   +-------------+
-                     moka cache
-                     (blocks: 30d TTL)
-                     (cursors: 60s TTL)
+                     in-memory progress map
+                     (cursor + head per chain)
 
 ingestion loop and axum API run as a single binary.
 
@@ -31,10 +31,10 @@ ingestion cycle
 
 for each of the 30 chains, every 60 seconds:
 
-    read cursor from Postgres (last ingested block, default 0)
+    read cursor from progress map (last ingested block, default 0)
          |
          v
-    fetch finalized head from SQD (cached 60s in moka)
+    fetch finalized head from SQD (stale value used as fallback)
          |
          v
     gap = head - cursor
@@ -48,11 +48,11 @@ for each of the 30 chains, every 60 seconds:
                            parse NDJSON response (number, timestamp pairs)
                                 |
                                 v
-                           INSERT via UNNEST (ON CONFLICT DO NOTHING)
+                           write block keys to fjall (idempotent)
                            upsert cursor to new position
                                 |
                                 v
-                           update shared cursor cache (API reads this for indexedUpTo)
+                           update shared progress map (API reads this for indexedUpTo)
 
 backfill happens naturally: new chains start at cursor 0, the loop sees the full
 gap and chews through it in 50k-block batches.
@@ -63,43 +63,35 @@ block lookup
 
     GET /v1/chains/:chainId/block/before/:timestamp
 
-    check moka cache (key: "block:{chainId}:{ts}:{direction}")
+    range scan on fjall blocks keyspace
          |
-         +-- hit ----> return cached BlockResponse
+         v
+    key = chain_id(4B BE) | timestamp(8B BE) | number(8B BE)
+    big-endian ensures lexicographic order matches numeric order
          |
-         +-- miss ---> query Postgres
-                        |
-                        v
-                   SELECT number, timestamp
-                   FROM blocks
-                   WHERE chain_id = $1 AND timestamp < $2
-                   ORDER BY timestamp DESC
-                   LIMIT 1
-                        |
-                        v
-                   fetch indexedUpTo from cursor cache
-                        |
-                        v
-                   cache result (30-day TTL), return BlockResponse
-                   { number, timestamp, indexedUpTo }
+         v
+    before inclusive: range(C|0|0 ..= C|T|MAX).next_back()
+    before exclusive: range(C|0|0 .. C|T|0).next_back()
+    after inclusive:  range(C|T|0 .. C+1|0|0).next()
+    after exclusive:  range(C|T+1|0 .. C+1|0|0).next()
+         |
+         v
+    read indexedUpTo from progress map
+         |
+         v
+    return BlockResponse { number, timestamp, indexedUpTo }
 
 
-schema
-------
+storage layout
+--------------
 
-    blocks
-    +----------+---------+-----------+
-    | chain_id | number  | timestamp |
-    | INTEGER  | BIGINT  | BIGINT    |
-    +----------+---------+-----------+
-    PK: (chain_id, number)
-    covering index: (chain_id, timestamp, number)  -- index-only scans
+    blocks keyspace
+    key: chain_id (4B u32 BE) | timestamp (8B u64 BE) | number (8B u64 BE) = 20 bytes
+    value: empty
 
-    cursors
-    +----------+------------+------------+
-    | sqd_slug | last_block | updated_at |
-    | TEXT PK  | BIGINT     | TIMESTAMPTZ|
-    +----------+------------+------------+
+    cursors keyspace
+    key: sqd_slug (UTF-8 string)
+    value: last_block (8B i64 BE) | updated_at_secs (8B i64 BE) = 16 bytes
 
 
 endpoints
@@ -109,6 +101,7 @@ GET /v1/chains                                      list all supported chains
 GET /v1/chains/:chainId                             get chain by ID
 GET /v1/chains/:chainId/block/before/:timestamp     block before timestamp
 GET /v1/chains/:chainId/block/after/:timestamp      block after timestamp
+GET /v1/indexing-status                             indexing progress for all chains
 GET /health                                         health check
 GET /docs                                           swagger UI
 
@@ -116,7 +109,7 @@ GET /docs                                           swagger UI
 environment variables
 ---------------------
 
-DATABASE_URL            postgres connection string (required)
+DATA_DIR                path to fjall data directory (default: ./data)
 PORT                    http port (default: 8080)
 RUST_LOG                log level (default: info)
 INGEST_INTERVAL_SECS    seconds between ingestion cycles (default: 60)
@@ -126,14 +119,24 @@ running locally
 ---------------
 
 cargo build --release
-DATABASE_URL=postgres://... ./target/release/kizami-api
+./target/release/kizami-api
+
+data is stored in ./data by default. override with DATA_DIR.
+
+
+migrating from postgres
+-----------------------
+
+if upgrading from the postgres-backed version:
+
+DATABASE_URL=postgres://... DATA_DIR=./data cargo run -p kizami-migrate
 
 
 project structure
 -----------------
 
 crates/
-  shared/       chain configs, db queries, SQD client, error types, models
+  shared/       chain configs, storage layer, SQD client, error types, models
   api/          axum server, routes, state
   ingestion/    background ingestion loop
-migrations/     postgres schema
+  migrate/      one-time postgres -> fjall migration tool

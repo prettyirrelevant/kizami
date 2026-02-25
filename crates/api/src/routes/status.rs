@@ -1,16 +1,12 @@
 //! Indexing status endpoint.
 //!
 //! Returns the indexing progress for all supported chains by combining static chain
-//! configuration, cursor data from Postgres, and finalized head data from the shared cache.
-
-use std::collections::HashMap;
+//! configuration and the in-memory progress map (cursor, head, updated_at).
 
 use axum::extract::State;
 use axum::Json;
-use chrono::{DateTime, Utc};
 
 use kizami_shared::chains::CHAINS;
-use kizami_shared::db;
 use kizami_shared::error::AppError;
 use kizami_shared::models::IndexingStatusResponse;
 
@@ -29,22 +25,14 @@ use crate::state::AppState;
 pub async fn indexing_status(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<IndexingStatusResponse>>, AppError> {
-    let cursors = db::get_all_cursors(&state.pool).await?;
-    let cursor_map: HashMap<&str, (i64, DateTime<Utc>)> = cursors
-        .iter()
-        .map(|(slug, block, updated)| (slug.as_str(), (*block, *updated)))
-        .collect();
-
+    let map = state.progress.read().await;
     let mut results = Vec::with_capacity(CHAINS.len());
 
     for chain in CHAINS {
-        let (last_indexed_block, updated_at) = cursor_map
-            .get(chain.sqd_slug)
-            .copied()
-            .map(|(block, ts)| (block, Some(ts)))
-            .unwrap_or((0, None));
-
-        let latest_known_block = state.head_cache.get(&chain.sqd_slug.to_string()).await;
+        let (last_indexed_block, latest_known_block, updated_at) = match map.get(chain.sqd_slug) {
+            Some(p) => (p.cursor, p.head, p.updated_at),
+            None => (0, None, None),
+        };
 
         let progress = latest_known_block.map(|head| {
             if head == 0 {

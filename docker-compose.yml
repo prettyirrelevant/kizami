@@ -6,13 +6,12 @@ services:
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     environment:
-      DATABASE_URL: postgres://kizami:kizami@postgres:5432/kizami
+      DATA_DIR: /data
       PORT: ${PORT:-8080}
       RUST_LOG: ${RUST_LOG:-info}
       INGEST_INTERVAL_SECS: ${INGEST_INTERVAL_SECS:-60}
-    depends_on:
-      postgres:
-        condition: service_healthy
+    volumes:
+      - fjall-data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health"]
       interval: 30s
@@ -32,56 +31,11 @@ services:
         max-size: 10m
         max-file: "3"
     networks:
-      - backend
       - shared_proxy
 
-  postgres:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_USER: kizami
-      POSTGRES_PASSWORD: kizami
-      POSTGRES_DB: kizami
-    command:
-      - postgres
-      - -c
-      - shared_buffers=2GB
-      - -c
-      - effective_cache_size=6GB
-      - -c
-      - work_mem=64MB
-      - -c
-      - maintenance_work_mem=512MB
-      - -c
-      - max_wal_size=2GB
-    volumes:
-      - pg-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kizami"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-    shm_size: 2g
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 10G
-        reservations:
-          memory: 4G
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: "3"
-    networks:
-      - backend
-
 networks:
-  backend:
-    driver: bridge
   shared_proxy:
     external: true
 
 volumes:
-  pg-data:
+  fjall-data:

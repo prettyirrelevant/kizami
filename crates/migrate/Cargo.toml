@@ -1,0 +1,20 @@
+[package]
+name = "kizami-migrate"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "kizami_migrate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kizami-migrate"
+path = "src/main.rs"
+
+[dependencies]
+kizami-shared = { path = "../shared" }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "chrono"] }
+chrono = "0.4"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

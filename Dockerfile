@@ -1,4 +1,4 @@
-FROM rust:1.88-bookworm AS chef
+FROM rust:1.93-bookworm AS chef
 RUN cargo install cargo-chef
 WORKDIR /app
 
@@ -12,8 +12,8 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
 
-FROM gcr.io/distroless/cc-debian12
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/kizami-api /usr/local/bin/
-COPY --from=builder /app/migrations /app/migrations
 WORKDIR /app
-CMD ["kizami-api"]
+ENTRYPOINT ["kizami-api"]

@@ -5,23 +5,15 @@ edition = "2021"
 
 [dependencies]
 axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+fjall = "3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "migrate", "chrono"] }
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 tracing = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
 
-testcontainers-modules = { version = "0.11", features = ["postgres"], optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
-
-[features]
-testing = ["testcontainers-modules", "uuid"]
-
 [dev-dependencies]
-testcontainers-modules = { version = "0.11", features = ["postgres"] }
-tokio = { version = "1", features = ["full"] }
-uuid = { version = "1", features = ["v4"] }
+tempfile = "3"

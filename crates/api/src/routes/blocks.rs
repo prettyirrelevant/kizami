@@ -1,15 +1,14 @@
 //! Block lookup endpoint.
 //!
 //! Finds the closest block before or after a given Unix timestamp for a specific chain.
-//! Results are cached in moka (30-day TTL) since finalized blocks are immutable.
-//! The `indexedUpTo` field tells clients how far ingestion has progressed.
+//! Results come from the embedded fjall storage. The `indexedUpTo` field tells clients
+//! how far ingestion has progressed.
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
 
 use kizami_shared::chains;
-use kizami_shared::db;
 use kizami_shared::error::AppError;
 use kizami_shared::models::BlockResponse;
 
@@ -39,9 +38,9 @@ pub struct InclusiveQuery {
 
 /// Finds the closest block before or after a given Unix timestamp.
 ///
-/// The lookup checks the moka cache first, then falls back to a Postgres range query
-/// using the covering index `(chain_id, timestamp, number)`. The `inclusive` query
-/// parameter controls whether blocks at exactly the given timestamp are included.
+/// The lookup queries fjall storage using a range scan on the composite key
+/// `(chain_id, timestamp, number)`. The `inclusive` query parameter controls
+/// whether blocks at exactly the given timestamp are included.
 #[utoipa::path(
     get,
     path = "/v1/chains/{chain_id}/block/{direction}/{timestamp}",
@@ -83,38 +82,26 @@ pub async fn find_block(
     let chain = chains::chain_by_id(chain_id)
         .ok_or_else(|| AppError::ChainNotFound(chain_id.to_string()))?;
 
-    // check block cache (30-day TTL, finalized blocks are immutable)
-    let cache_key = format!("block:{chain_id}:{timestamp}:{direction}:{inclusive}");
-    if let Some(cached) = state.block_cache.get(&cache_key).await {
-        return Ok(Json(cached));
-    }
-
-    let row = db::find_block(&state.pool, chain_id, timestamp, &direction, inclusive)
-        .await?
+    let row = state
+        .storage
+        .find_block(chain_id, timestamp, &direction, inclusive)?
         .ok_or_else(|| AppError::BlockNotFound {
             chain_id: chain_id.to_string(),
             timestamp,
             direction: direction.clone(),
         })?;
 
-    // check cursor cache (60s TTL) to populate indexedUpTo
-    let cursor_key = format!("cursor:{}", chain.sqd_slug);
-    let indexed_up_to = match state.cursor_cache.get(&cursor_key).await {
-        Some(v) => v,
-        None => {
-            let v = db::get_cursor(&state.pool, chain.sqd_slug).await?;
-            state.cursor_cache.insert(cursor_key, v).await;
-            v
-        }
+    // read indexedUpTo from the in-memory progress map
+    let indexed_up_to = {
+        let map = state.progress.read().await;
+        map.get(chain.sqd_slug).map(|p| p.cursor).unwrap_or(0)
     };
 
-    let response = BlockResponse {
+    Ok(Json(BlockResponse {
         number: row.0,
         timestamp: row.1,
         indexed_up_to,
-    };
-    state.block_cache.insert(cache_key, response.clone()).await;
-    Ok(Json(response))
+    }))
 }
 
 #[cfg(test)]
@@ -126,11 +113,25 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    use kizami_shared::db;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use tokio::sync::RwLock;
+
+    use kizami_shared::storage::{ChainProgress, Storage};
 
     use crate::state::AppState;
 
     use super::*;
+
+    fn test_state() -> (AppState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState {
+            storage: Storage::open(dir.path()).unwrap(),
+            progress: Arc::new(RwLock::new(HashMap::new())),
+        };
+        (state, dir)
+    }
 
     fn app(state: AppState) -> Router {
         Router::new()
@@ -154,8 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_direction_returns_400() {
-        let pool = db::tests::test_pool().await;
-        let state = AppState::new(pool);
+        let (state, _dir) = test_state();
         let (status, json) = get_json(app(state), "/v1/chains/1/block/sideways/1000").await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -164,8 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn negative_timestamp_returns_400() {
-        let pool = db::tests::test_pool().await;
-        let state = AppState::new(pool);
+        let (state, _dir) = test_state();
         let (status, json) = get_json(app(state), "/v1/chains/1/block/before/-1").await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -174,8 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_chain_returns_404() {
-        let pool = db::tests::test_pool().await;
-        let state = AppState::new(pool);
+        let (state, _dir) = test_state();
         let (status, json) = get_json(app(state), "/v1/chains/999999/block/before/1000").await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -184,8 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn block_not_found_returns_404() {
-        let pool = db::tests::test_pool().await;
-        let state = AppState::new(pool);
+        let (state, _dir) = test_state();
         let (status, json) = get_json(app(state), "/v1/chains/1/block/before/1000").await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -194,40 +191,30 @@ mod tests {
 
     #[tokio::test]
     async fn successful_block_lookup() {
-        let pool = db::tests::test_pool().await;
-        db::insert_blocks(&pool, 1, &[100, 101, 102], &[1000, 2000, 3000])
-            .await
-            .unwrap();
-        db::upsert_cursor(&pool, "ethereum-mainnet", 102)
-            .await
+        let (state, _dir) = test_state();
+        state
+            .storage
+            .insert_blocks(1, &[100, 101, 102], &[1000, 2000, 3000])
             .unwrap();
 
-        let state = AppState::new(pool);
+        // populate progress map with cursor
+        {
+            let mut map = state.progress.write().await;
+            map.insert(
+                "ethereum-mainnet".to_string(),
+                ChainProgress {
+                    cursor: 102,
+                    head: None,
+                    updated_at: None,
+                },
+            );
+        }
+
         let (status, json) = get_json(app(state), "/v1/chains/1/block/before/2500").await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["number"], 101);
         assert_eq!(json["timestamp"], 2000);
         assert_eq!(json["indexedUpTo"], 102);
-    }
-
-    #[tokio::test]
-    async fn cache_hit_returns_same_result() {
-        let pool = db::tests::test_pool().await;
-        db::insert_blocks(&pool, 1, &[100], &[1000]).await.unwrap();
-        db::upsert_cursor(&pool, "ethereum-mainnet", 100)
-            .await
-            .unwrap();
-
-        let state = AppState::new(pool);
-        let router = app(state);
-        let uri = "/v1/chains/1/block/before/2000";
-
-        let (s1, j1) = get_json(router.clone(), uri).await;
-        let (s2, j2) = get_json(router, uri).await;
-
-        assert_eq!(s1, StatusCode::OK);
-        assert_eq!(s2, StatusCode::OK);
-        assert_eq!(j1, j2);
     }
 }
