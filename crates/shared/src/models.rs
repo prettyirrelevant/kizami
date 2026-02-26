@@ -1,13 +1,12 @@
 //! API response types with serde serialization and OpenAPI schema generation.
 //!
-//! All response types use `camelCase` field names for the JSON wire format.
+//! All response types use `snake_case` field names for the JSON wire format.
 
 use serde::Serialize;
 use utoipa::ToSchema;
 
 /// Response for chain information endpoints.
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct ChainResponse {
     /// Human-readable chain name.
     pub name: &'static str,
@@ -19,7 +18,6 @@ pub struct ChainResponse {
 
 /// Response for block lookup endpoints.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct BlockResponse {
     /// Block number.
     pub number: i64,
@@ -31,7 +29,6 @@ pub struct BlockResponse {
 
 /// Response for the indexing status endpoint.
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct IndexingStatusResponse {
     /// Human-readable chain name.
     pub name: &'static str,
@@ -68,27 +65,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chain_response_serializes_to_camel_case() {
+    fn chain_response_serializes_to_snake_case() {
         let resp = ChainResponse {
             name: "Ethereum",
             chain_id: 1,
             genesis_timestamp: 1438269988,
         };
         let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["chainId"], 1);
-        assert_eq!(json["genesisTimestamp"], 1438269988);
+        assert_eq!(json["chain_id"], 1);
+        assert_eq!(json["genesis_timestamp"], 1438269988);
         assert_eq!(json["name"], "Ethereum");
     }
 
     #[test]
-    fn block_response_serializes_to_camel_case() {
+    fn block_response_serializes_to_snake_case() {
         let resp = BlockResponse {
             number: 100,
             timestamp: 1000,
             indexed_up_to: 200,
         };
         let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["indexedUpTo"], 200);
+        assert_eq!(json["indexed_up_to"], 200);
         assert_eq!(json["number"], 100);
         assert_eq!(json["timestamp"], 1000);
     }

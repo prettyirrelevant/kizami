@@ -1,7 +1,7 @@
 //! Block lookup endpoint.
 //!
 //! Finds the closest block before or after a given Unix timestamp for a specific chain.
-//! Results come from the embedded fjall storage. The `indexedUpTo` field tells clients
+//! Results come from the embedded fjall storage. The `indexed_up_to` field tells clients
 //! how far ingestion has progressed.
 
 use axum::extract::{Path, Query, State};
@@ -91,7 +91,7 @@ pub async fn find_block(
             direction: direction.clone(),
         })?;
 
-    // read indexedUpTo from the in-memory progress map
+    // read indexed_up_to from the in-memory progress map
     let indexed_up_to = {
         let map = state.progress.read().await;
         map.get(chain.sqd_slug).map(|p| p.cursor).unwrap_or(0)
@@ -215,6 +215,6 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["number"], 101);
         assert_eq!(json["timestamp"], 2000);
-        assert_eq!(json["indexedUpTo"], 102);
+        assert_eq!(json["indexed_up_to"], 102);
     }
 }

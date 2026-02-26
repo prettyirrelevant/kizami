@@ -487,7 +487,7 @@
     }
 
     function status(c) {
-      if (c.latestKnownBlock != null && c.latestKnownBlock - c.lastIndexedBlock <= SYNCED_GAP) return 'synced';
+      if (c.latest_known_block != null && c.latest_known_block - c.last_indexed_block <= SYNCED_GAP) return 'synced';
       return 'syncing';
     }
 
@@ -519,7 +519,7 @@
     };
 
     function logoHtml(c) {
-      const src = LOGOS[c.chainId];
+      const src = LOGOS[c.chain_id];
       if (src) return `<img class="chain-logo" src="${src}" alt="">`;
       return `<div class="chain-logo-fallback">${c.name.charAt(0)}</div>`;
     }
@@ -543,10 +543,10 @@
       }
 
       let blocksText;
-      if (c.latestKnownBlock != null) {
-        blocksText = `<span class="num">${fmt(c.lastIndexedBlock)}</span> of ${fmt(c.latestKnownBlock)}`;
+      if (c.latest_known_block != null) {
+        blocksText = `<span class="num">${fmt(c.last_indexed_block)}</span> of ${fmt(c.latest_known_block)}`;
       } else {
-        blocksText = `<span class="num">${fmt(c.lastIndexedBlock)}</span> blocks`;
+        blocksText = `<span class="num">${fmt(c.last_indexed_block)}</span> blocks`;
       }
 
       const el = document.createElement('div');
@@ -590,7 +590,7 @@
       // hero stats
       const synced = data.filter(c => status(c) === 'synced').length;
       const syncing = data.filter(c => status(c) === 'syncing').length;
-      const blocks = data.reduce((s, c) => s + c.lastIndexedBlock, 0);
+      const blocks = data.reduce((s, c) => s + c.last_indexed_block, 0);
 
       document.getElementById('hTotal').textContent = data.length;
       document.getElementById('hSynced').textContent = synced;
