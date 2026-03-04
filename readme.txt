@@ -3,7 +3,7 @@ kizami
 
 block-by-timestamp lookup API for EVM chains. ingests block headers from SQD Portal
 into an embedded fjall database, then serves fast lookups from that index. supports
-30 chains. single binary, no external dependencies.
+29 chains. single binary, no external dependencies.
 
 stack: rust, axum, fjall (embedded LSM-tree storage), tokio
 
@@ -13,7 +13,7 @@ data pipeline
 
                          NDJSON
     SQD Portal ---------> Ingestion Loop ---------> fjall
-    (30 chains)           (50k blocks/batch)         |
+    (29 chains)           (50k blocks/batch)         |
                           (cycles every 60s)         |
                                                      v
                                               +-------------+
@@ -29,7 +29,7 @@ ingestion loop and axum API run as a single binary.
 ingestion cycle
 ---------------
 
-for each of the 30 chains, every 60 seconds:
+for each of the 29 chains, every 60 seconds:
 
     read cursor from progress map (last ingested block, default 0)
          |

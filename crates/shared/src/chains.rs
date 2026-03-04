@@ -1,6 +1,6 @@
 //! Static chain configuration for all supported EVM networks.
 //!
-//! All 30 chains are defined as compile-time constants with zero-allocation lookups
+//! All 29 chains are defined as compile-time constants with zero-allocation lookups
 //! via `LazyLock<HashMap>`. Genesis timestamps are sourced from on-chain RPC
 //! (`eth_getBlockByNumber`); where block 0 has timestamp 0, block 1 is used instead.
 
@@ -177,12 +177,6 @@ pub static CHAINS: &[ChainConfig] = &[
         chain_id: 57073,
         sqd_slug: "ink-mainnet",
         genesis_timestamp: 1733498411,
-    },
-    ChainConfig {
-        name: "Plume",
-        chain_id: 98866,
-        sqd_slug: "plume-mainnet",
-        genesis_timestamp: 1740047951,
     },
     ChainConfig {
         name: "Merlin",
