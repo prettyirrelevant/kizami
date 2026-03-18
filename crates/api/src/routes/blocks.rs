@@ -5,6 +5,7 @@
 //! how far ingestion has progressed.
 
 use axum::extract::{Path, Query, State};
+use axum::http::header;
 use axum::Json;
 use serde::Deserialize;
 
@@ -63,7 +64,7 @@ pub async fn find_block(
     State(state): State<AppState>,
     Path(params): Path<BlockPath>,
     Query(query): Query<InclusiveQuery>,
-) -> Result<Json<BlockResponse>, AppError> {
+) -> Result<([(header::HeaderName, &'static str); 1], Json<BlockResponse>), AppError> {
     let BlockPath {
         chain_id,
         direction,
@@ -97,11 +98,14 @@ pub async fn find_block(
         map.get(chain.sqd_slug).map(|p| p.cursor).unwrap_or(0)
     };
 
-    Ok(Json(BlockResponse {
-        number: row.0,
-        timestamp: row.1,
-        indexed_up_to,
-    }))
+    Ok((
+        [(header::CACHE_CONTROL, "public, max-age=86400")],
+        Json(BlockResponse {
+            number: row.0,
+            timestamp: row.1,
+            indexed_up_to,
+        }),
+    ))
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
 //! configuration and the in-memory progress map (cursor, head, updated_at).
 
 use axum::extract::State;
+use axum::http::header;
 use axum::Json;
 
 use kizami_shared::chains::CHAINS;
@@ -24,7 +25,13 @@ use crate::state::AppState;
 )]
 pub async fn indexing_status(
     State(state): State<AppState>,
-) -> Result<Json<Vec<IndexingStatusResponse>>, AppError> {
+) -> Result<
+    (
+        [(header::HeaderName, &'static str); 1],
+        Json<Vec<IndexingStatusResponse>>,
+    ),
+    AppError,
+> {
     let map = state.progress.read().await;
     let mut results = Vec::with_capacity(CHAINS.len());
 
@@ -53,5 +60,8 @@ pub async fn indexing_status(
     }
 
     results.sort_by_key(|r| r.chain_id);
-    Ok(Json(results))
+    Ok((
+        [(header::CACHE_CONTROL, "public, max-age=60")],
+        Json(results),
+    ))
 }
